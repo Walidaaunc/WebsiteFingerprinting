@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Website Fingerprinting</title>
+  <style>
+    body { font-family: Arial, Helvetica, sans-serif; margin: 0; padding: 64px; }
+    h1 { font-size: 32px; margin: 0 0 16px; }
+    button {
+      background: #fff; border: 2px solid #3498db; border-radius: 4px; color: #3498db;
+      cursor: pointer; font-size: 16px; margin: 0 16px 16px 0; padding: 8px 16px;
+    }
+    button:disabled { background: #ccc; border-color: #ccc; color: #666; cursor: default; }
+    /* One canvas pixel per sample, stretched to full width */
+    canvas { display: block; width: 100%; height: 64px; margin-bottom: 16px; image-rendering: pixelated; }
+  </style>
+</head>
+<body>
+  <h1>Website Fingerprinting</h1>
+  <button id="collect">Collect trace</button>
+  <button id="download">Download traces</button>
+  <div id="traces"></div>
+
+  <script>
+    // collect_traces.py reads/writes these globals via Selenium
+    window.using_automation_script = false;
+    window.recording = false;
+    window.traces = [];
+
+    const worker = new Worker("worker.js");
+    const collectBtn = document.getElementById("collect");
+    const tracesDiv = document.getElementById("traces");
+    const COLORS = ["#0d0887", "#7e03a8", "#cc4778", "#f89540", "#f0f921"]; // low -> high sweep count
+
+    // Redraws every trace on one shared color scale
+    function draw() {
+      const max = traces.reduce((m, t) => Math.max(m, ...t), 0);
+      tracesDiv.replaceChildren();
+      for (const trace of traces) {
+        const canvas = document.createElement("canvas");
+        canvas.width = trace.length;
+        canvas.height = 1;
+        const ctx = canvas.getContext("2d");
+        trace.forEach((v, i) => {
+          ctx.fillStyle = COLORS[Math.min(COLORS.length - 1, Math.floor((v / max) * COLORS.length))];
+          ctx.fillRect(i, 0, 1, 1);
+        });
+        tracesDiv.appendChild(canvas);
+      }
+    }
+
+    worker.onmessage = (e) => {
+      traces.push(JSON.parse(e.data));
+      recording = false;
+      collectBtn.disabled = false;
+      collectBtn.textContent = "Collect trace";
+      if (!using_automation_script) draw(); // skips drawing during automation to avoid noise
+    };
+
+    // Called directly by collect_traces.py
+    function collectTrace() {
+      recording = true;
+      collectBtn.disabled = true;
+      collectBtn.textContent = "Collecting trace...";
+      worker.postMessage({ type: "start" });
+    }
+
+    // Manual mode: 3-second countdown so I can switch to the victim tab
+    collectBtn.onclick = async () => {
+      collectBtn.disabled = true;
+      for (let n = 3; n > 0; n--) {
+        collectBtn.textContent = `Starting in ${n}...`;
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+      collectTrace();
+    };
+
+    document.getElementById("download").onclick = () => {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([JSON.stringify({ traces })], { type: "application/json" }));
+      a.download = "traces.json";
+      a.click();
+    };
+  </script>
+</body>
+</html>
